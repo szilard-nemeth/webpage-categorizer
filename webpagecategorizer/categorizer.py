@@ -1,9 +1,10 @@
 import json
 import os.path
 import re
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Iterable
 
 import click
 
@@ -44,8 +45,50 @@ def get_links_from_file(category, target_file) -> Set[str]:
 
     return s
 
+
+class LinkAction(ABC):
+    @abstractmethod
+    def perform(self):
+        """Execute the action (e.g., copy or remove a line)."""
+        pass
+
+    @abstractmethod
+    def describe(self) -> str:
+        """Return a string describing the action (used for printing)."""
+        pass
+
+
 @dataclass
-class LinkMoveAction:
+class RemoveLinksFromFileAction(LinkAction):
+    category: str
+    category_file: Path
+    src_file_name: Path
+    line_number: int
+    links: Iterable[str] = field(default_factory=set)
+
+    def perform(self):
+        with self.src_file_name.open('r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped in self.links:
+                continue
+            new_lines.append(line)
+
+        with self.src_file_name.open('w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+
+    def describe(self) -> str:
+        s = ""
+        for link in self.links:
+            s += f"{self.src_file_name}:{self.line_number} {link.strip()} --> REMOVED (from {self.category_file.name})\n"
+        return s
+
+
+@dataclass
+class LinkCopyAction(LinkAction):
     category: str
     src_file_name: Path
     line_number: int
@@ -53,22 +96,29 @@ class LinkMoveAction:
     target_file: Path
 
 
-class LinkMoveActions:
-    def __init__(self):
-        self._actions = []
+    def perform(self):
+        with self.target_file.open('a', encoding='utf-8') as f:
+            f.write(self.link)
 
-    def add(self, action):
+    def describe(self) -> str:
+        return f"{self.src_file_name}:{self.line_number} {self.link.strip()} --> {self.target_file.name}"
+
+
+
+class LinkActions:
+    def __init__(self):
+        self._actions: List[LinkAction] = []
+
+    def add(self, action: LinkAction):
         self._actions.append(action)
 
     def size(self):
         return len(self._actions)
 
     def _get_actions_by_category(self):
-        d = {}
+        d: Dict[str, List[LinkAction]] = {}
         for a in self._actions:
-            if a.category not in d:
-                d[a.category] = []
-            d[a.category].append(a)
+            d.setdefault(a.category, []).append(a)
         return d
 
     def print_actions(self):
@@ -76,20 +126,14 @@ class LinkMoveActions:
 
         for category, actions in actions_by_category.items():
             for action in actions:
-                print(f"{action.src_file_name}:{action.line_number} {action.link.strip()} --> {action.target_file.name}")
+                print(action.describe())
 
     def perform_actions(self):
         actions_by_category = self._get_actions_by_category()
 
-        all_moves = []  # List of tuples (file, line_num, line, category)
         for category, actions in actions_by_category.items():
-            # Target file is the same for all actions per one category
-            target_file = actions[0].target_file
-            with target_file.open('a', encoding='utf-8') as f:
-                for action in actions:
-                    f.write(action.link)
-                    all_moves.append((action.src_file_name, action.idx, action.link, category))
-        return all_moves
+            for action in actions:
+                action.perform()
 
 
 @click.command()
@@ -108,10 +152,9 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
     category_patterns = load_category_patterns(categories_file)
 
     target_file_by_category = {}
-    move_actions = []
 
     # Step 1: Categorize lines
-    actions = LinkMoveActions()
+    actions = LinkActions()
     for file in input_path.glob("*.txt"):
         with file.open('r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -126,39 +169,51 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
 
                 # Only add to target file if link does not exist
                 if line not in links:
-                    actions.add(LinkMoveAction(category, file, idx, line, target_file))
+                    actions.add(LinkCopyAction(category, file, idx, line, target_file))
 
     actions.print_actions()
-
-    all_moves = None
     if actions.size() > 0:
         if yes or click.confirm("Confirm line copy operations?"):
-            all_moves = actions.perform_actions()
+            actions.perform_actions()
 
 
     # Step 2: Optionally remove moved lines from original files
-    if remove_moved_lines and all_moves:
-        print("\n--- Removing moved lines from source files ---")
-        file_map = {}
-        for file, idx, line, _ in all_moves:
-            file_map.setdefault(file, []).append((idx, line))
+    if remove_moved_lines:
+        remove_categorized_lines_from_inputs(input_path, output_path, yes)
 
-        for file, removals in file_map.items():
-            with file.open('r', encoding='utf-8') as f:
-                lines = f.readlines()
+def remove_categorized_lines_from_inputs(input_path, output_path, yes):
+    """Removes lines from input files that already exist in the category files."""
+    print("\n--- Removing lines from source files that are already in category files ---")
 
-            removal_indexes = {idx - 1 for idx, _ in removals}
-            kept_lines = []
-            for i, line in enumerate(lines):
-                if i in removal_indexes:
-                    print(f"{file.name}:{i+1} {line.strip()} --> REMOVED")
-                    if not (yes or click.confirm("Confirm removal?")):
-                        kept_lines.append(line)
-                else:
-                    kept_lines.append(line)
+    # Step 1: Collect all categorized lines
+    categorized_lines = set()
+    for cat_file in output_path.glob("*.txt"):
+        with cat_file.open('r', encoding='utf-8') as f:
+            for line in f:
+                categorized_lines.add(line.strip())
 
-            with file.open('w', encoding='utf-8') as f:
-                f.writelines(kept_lines)
+    actions = LinkActions()
+
+    # Step 2: Remove matching lines from input files
+    for file in input_path.glob("*.txt"):
+        category = os.path.basename(file).replace(".txt", "")
+        with file.open('r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        links = set()
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped in categorized_lines:
+                links.add(stripped)
+
+        if links:
+            actions.add(RemoveLinksFromFileAction(category, cat_file, file, idx, links))
+
+    actions.print_actions()
+    if actions.size() > 0:
+        if yes or click.confirm("Confirm line removal operations?"):
+            actions.perform_actions()
+
 
 if __name__ == '__main__':
     categorize_websites()
