@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "webpage-categorizer"
+version = "0.1.0"
+description = ""
+authors = ["Szilard Nemeth <szilard.nemeth88@gmail.com>"]
+readme = "README.md"
+packages = [{include = "webpagecategorizer"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+click = "*"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
