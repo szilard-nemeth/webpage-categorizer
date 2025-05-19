@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from shutil import move
 
+import click
+
 # Category regexes
 CATEGORY_PATTERNS = {
     'news': [r'nytimes\.com', r'bbc\.co\.uk', r'444\.hu', r'telex\.hu'],
@@ -17,7 +19,12 @@ def categorize_line(line):
                 return category
     return None
 
-def process_files(input_dir, output_dir):
+@click.command()
+@click.option('--input-dir', '-i', required=True, type=click.Path(exists=True, file_okay=False), help='Directory with input .txt files.')
+@click.option('--output-dir', '-o', required=True, type=click.Path(file_okay=False), help='Directory to write category files to.')
+@click.option('--yes', '-y', is_flag=True, help='Auto-confirm all moves (non-interactive).')
+def process_files(input_dir, output_dir, yes):
+    """Categorize websites from .txt files into groups like news/music/learn based on regexes."""
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -32,8 +39,7 @@ def process_files(input_dir, output_dir):
             if category:
                 target_file = output_path / f"{category}.txt"
                 print(f"{file.name}:{idx} {line.strip()} --> {target_file.name}")
-                confirm = input("Confirm move? (Y/N): ").strip().lower()
-                if confirm == 'y':
+                if yes or click.confirm("Confirm move?"):
                     with target_file.open('a', encoding='utf-8') as tf:
                         tf.write(line)
                 else:
@@ -41,11 +47,9 @@ def process_files(input_dir, output_dir):
             else:
                 new_lines.append(line)
 
-        # Overwrite the original file with lines that weren't moved
+        # Rewrite file without moved lines
         with file.open('w', encoding='utf-8') as f:
             f.writelines(new_lines)
 
-if __name__ == "__main__":
-    input_dir = input("Enter path to input directory: ").strip()
-    output_dir = input("Enter path to target/output directory: ").strip()
-    process_files(input_dir, output_dir)
+if __name__ == '__main__':
+    process_files()
