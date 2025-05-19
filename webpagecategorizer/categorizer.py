@@ -1,19 +1,21 @@
-import os
+import json
 import re
 from pathlib import Path
-from shutil import move
-
 import click
 
-# Category regexes
-CATEGORY_PATTERNS = {
-    'news': [r'nytimes\.com', r'bbc\.co\.uk', r'444\.hu', r'telex\.hu'],
-    'music': [r'spotify\.com', r'soundcloud\.com'],
-    'learn': [r'khanacademy\.org', r'coursera\.org', r'edx\.org'],
-}
+def load_category_patterns(json_path):
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    # Validate that data is in correct format
+    if not isinstance(data, dict):
+        raise ValueError("Category file must be a JSON object with category names as keys and list of regex patterns as values.")
+    for key, patterns in data.items():
+        if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+            raise ValueError(f"Each category must map to a list of regex strings. Problem in category: {key}")
+    return data
 
-def categorize_line(line):
-    for category, patterns in CATEGORY_PATTERNS.items():
+def categorize_line(line, patterns_by_category):
+    for category, patterns in patterns_by_category.items():
         for pattern in patterns:
             if re.search(pattern, line, re.IGNORECASE):
                 return category
@@ -22,23 +24,27 @@ def categorize_line(line):
 @click.command()
 @click.option('--input-dir', '-i', required=True, type=click.Path(exists=True, file_okay=False), help='Directory with input .txt files.')
 @click.option('--output-dir', '-o', required=True, type=click.Path(file_okay=False), help='Directory to write category files to.')
+@click.option('--categories-file', '-c', required=True, type=click.Path(exists=True, dir_okay=False), help='Path to JSON file defining categories and regex patterns.')
 @click.option('--yes', '-y', is_flag=True, help='Auto-confirm all moves (non-interactive).')
 @click.option('--remove-moved-lines', is_flag=True, help='Remove lines from source files based on lines moved into category files.')
-def categorize_websites(input_dir, output_dir, yes, remove_moved_lines):
-    """Categorize websites into category files. Optionally remove moved lines from original files."""
+def categorize_websites(input_dir, output_dir, categories_file, yes, remove_moved_lines):
+    """Categorize websites into groups based on regex patterns from a JSON file."""
     input_path = Path(input_dir)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    all_moves = []  # To track what was moved: (file, line_num, line, category)
+    # Load category patterns
+    category_patterns = load_category_patterns(categories_file)
 
-    # Step 1: Categorize lines without touching original files
+    all_moves = []  # List of tuples (file, line_num, line, category)
+
+    # Step 1: Categorize lines
     for file in input_path.glob("*.txt"):
         with file.open('r', encoding='utf-8') as f:
             lines = f.readlines()
 
         for idx, line in enumerate(lines, 1):
-            category = categorize_line(line)
+            category = categorize_line(line, category_patterns)
             if category:
                 target_file = output_path / f"{category}.txt"
                 print(f"{file.name}:{idx} {line.strip()} --> {target_file.name}")
@@ -50,7 +56,6 @@ def categorize_websites(input_dir, output_dir, yes, remove_moved_lines):
     # Step 2: Optionally remove moved lines from original files
     if remove_moved_lines and all_moves:
         print("\n--- Removing moved lines from source files ---")
-        # Group by file
         file_map = {}
         for file, idx, line, _ in all_moves:
             file_map.setdefault(file, []).append((idx, line))
@@ -59,7 +64,7 @@ def categorize_websites(input_dir, output_dir, yes, remove_moved_lines):
             with file.open('r', encoding='utf-8') as f:
                 lines = f.readlines()
 
-            removal_indexes = {idx - 1 for idx, _ in removals}  # line numbers to 0-based indexes
+            removal_indexes = {idx - 1 for idx, _ in removals}
             kept_lines = []
             for i, line in enumerate(lines):
                 if i in removal_indexes:

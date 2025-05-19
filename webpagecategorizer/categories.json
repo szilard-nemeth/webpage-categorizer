@@ -1,0 +1,5 @@
+{
+  "news": ["nytimes\\.com", "bbc\\.co\\.uk", "cnn\\.com", "444\\.hu", "telex\\.hu"],
+  "music": ["spotify\\.com", "soundcloud\\.com"],
+  "learn": ["khanacademy\\.org", "coursera\\.org", "edx\\.org"]
+}
