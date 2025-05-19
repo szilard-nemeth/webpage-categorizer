@@ -1,7 +1,11 @@
 import json
 import re
 from pathlib import Path
+from typing import Dict, List, Set
+
 import click
+
+LINKS_BY_CATEGORY: Dict[str, Set[str]] = {}
 
 def load_category_patterns(json_path):
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -21,6 +25,22 @@ def categorize_line(line, patterns_by_category):
                 return category
     return None
 
+
+def get_links_from_file(category, target_file) -> Set[str]:
+    if category in LINKS_BY_CATEGORY:
+        return LINKS_BY_CATEGORY[category]
+
+    with target_file.open('r', encoding='utf-8') as f:
+        lines = f.readlines()
+
+    s = set()
+    for idx, line in enumerate(lines, 1):
+        s.add(line)
+    LINKS_BY_CATEGORY[category] = s
+
+    return s
+
+
 @click.command()
 @click.option('--input-dir', '-i', required=True, type=click.Path(exists=True, file_okay=False), help='Directory with input .txt files.')
 @click.option('--output-dir', '-o', required=True, type=click.Path(file_okay=False), help='Directory to write category files to.')
@@ -37,6 +57,7 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
     category_patterns = load_category_patterns(categories_file)
 
     all_moves = []  # List of tuples (file, line_num, line, category)
+    target_file_by_category = {}
 
     # Step 1: Categorize lines
     for file in input_path.glob("*.txt"):
@@ -46,12 +67,18 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
         for idx, line in enumerate(lines, 1):
             category = categorize_line(line, category_patterns)
             if category:
-                target_file = output_path / f"{category}.txt"
-                print(f"{file.name}:{idx} {line.strip()} --> {target_file.name}")
-                if yes or click.confirm("Confirm move?"):
-                    with target_file.open('a', encoding='utf-8') as tf:
-                        tf.write(line)
-                    all_moves.append((file, idx, line, category))
+                if category not in target_file_by_category:
+                    target_file_by_category[category] = output_path / f"{category}.txt"
+                target_file = target_file_by_category[category]
+                links = get_links_from_file(category, target_file)
+
+                # Only add to target file if link does not exist
+                if line not in links:
+                    print(f"{file.name}:{idx} {line.strip()} --> {target_file.name}")
+                    if yes or click.confirm("Confirm move?"):
+                        with target_file.open('a', encoding='utf-8') as tf:
+                            tf.write(line)
+                        all_moves.append((file, idx, line, category))
 
     # Step 2: Optionally remove moved lines from original files
     if remove_moved_lines and all_moves:
