@@ -1,5 +1,7 @@
 import json
+import os.path
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Set
 
@@ -30,6 +32,8 @@ def get_links_from_file(category, target_file) -> Set[str]:
     if category in LINKS_BY_CATEGORY:
         return LINKS_BY_CATEGORY[category]
 
+    if not os.path.exists(target_file):
+        return set()
     with target_file.open('r', encoding='utf-8') as f:
         lines = f.readlines()
 
@@ -39,6 +43,53 @@ def get_links_from_file(category, target_file) -> Set[str]:
     LINKS_BY_CATEGORY[category] = s
 
     return s
+
+@dataclass
+class LinkMoveAction:
+    category: str
+    src_file_name: Path
+    line_number: int
+    link: str
+    target_file: Path
+
+
+class LinkMoveActions:
+    def __init__(self):
+        self._actions = []
+
+    def add(self, action):
+        self._actions.append(action)
+
+    def size(self):
+        return len(self._actions)
+
+    def _get_actions_by_category(self):
+        d = {}
+        for a in self._actions:
+            if a.category not in d:
+                d[a.category] = []
+            d[a.category].append(a)
+        return d
+
+    def print_actions(self):
+        actions_by_category = self._get_actions_by_category()
+
+        for category, actions in actions_by_category.items():
+            for action in actions:
+                print(f"{action.src_file_name}:{action.line_number} {action.link.strip()} --> {action.target_file.name}")
+
+    def perform_actions(self):
+        actions_by_category = self._get_actions_by_category()
+
+        all_moves = []  # List of tuples (file, line_num, line, category)
+        for category, actions in actions_by_category.items():
+            # Target file is the same for all actions per one category
+            target_file = actions[0].target_file
+            with target_file.open('a', encoding='utf-8') as f:
+                for action in actions:
+                    f.write(action.link)
+                    all_moves.append((action.src_file_name, action.idx, action.link, category))
+        return all_moves
 
 
 @click.command()
@@ -56,10 +107,11 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
     # Load category patterns
     category_patterns = load_category_patterns(categories_file)
 
-    all_moves = []  # List of tuples (file, line_num, line, category)
     target_file_by_category = {}
+    move_actions = []
 
     # Step 1: Categorize lines
+    actions = LinkMoveActions()
     for file in input_path.glob("*.txt"):
         with file.open('r', encoding='utf-8') as f:
             lines = f.readlines()
@@ -74,11 +126,15 @@ def categorize_websites(input_dir, output_dir, categories_file, yes, remove_move
 
                 # Only add to target file if link does not exist
                 if line not in links:
-                    print(f"{file.name}:{idx} {line.strip()} --> {target_file.name}")
-                    if yes or click.confirm("Confirm move?"):
-                        with target_file.open('a', encoding='utf-8') as tf:
-                            tf.write(line)
-                        all_moves.append((file, idx, line, category))
+                    actions.add(LinkMoveAction(category, file, idx, line, target_file))
+
+    actions.print_actions()
+
+    all_moves = None
+    if actions.size() > 0:
+        if yes or click.confirm("Confirm line copy operations?"):
+            all_moves = actions.perform_actions()
+
 
     # Step 2: Optionally remove moved lines from original files
     if remove_moved_lines and all_moves:
