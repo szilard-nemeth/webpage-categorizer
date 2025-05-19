@@ -5,7 +5,7 @@ from shutil import move
 
 # Category regexes
 CATEGORY_PATTERNS = {
-    'news': [r'news', r'nytimes\.com', r'bbc\.co\.uk'],
+    'news': [r'nytimes\.com', r'bbc\.co\.uk', r'444\.hu', r'telex\.hu'],
     'music': [r'spotify\.com', r'soundcloud\.com'],
     'learn': [r'khanacademy\.org', r'coursera\.org', r'edx\.org'],
 }
